@@ -156,3 +156,42 @@ class Local2StageModel(BaseModel):
             loss_dict['l_pix'] = l_pix
             l_total += l_pix
 
+        # perceptual loss
+        if self.cri_perceptual:
+            l_percep = 0
+            for i, output in enumerate(self.outputs_2):
+                # h,w = output.shape[2:]
+                l_percep += self.cri_perceptual(output,
+                                                gts[i],
+                                                mask_gts[i])
+            loss_dict['l_percep'] = l_percep
+            l_total += l_percep
+
+        # mask loss
+        if self.cri_mask:
+            l_mask = 0
+            for i, mask in enumerate(self.masks):
+                # h,w = mask.shape[2:]
+                l_mask += self.cri_mask(mask, mask_gts[i])
+            loss_dict['l_mask'] = l_mask
+            l_total += l_mask
+
+        # ssim loss
+        if self.cri_ssim:
+            l_ssim = 0
+            for i, output in enumerate(self.outputs_2):
+                # print('gt',self.gt.max())
+                # print('out',output.max())
+                l_ssim += self.cri_ssim(output, gts[i], mask_gts[i]).mean()
+            for i, output in enumerate(self.outputs_1):
+                l_ssim += self.cri_ssim(output, gts[i], 1 - mask_gts[i]).mean()
+            loss_dict['l_ssim'] = l_ssim
+            l_total += l_ssim
+
+        l_total.backward()
+        self.optimizer_g.step()
+
+        self.log_dict = self.reduce_loss_dict(loss_dict)
+
+        if self.ema_decay > 0:
+            self.model_ema(decay=self.ema_decay)
