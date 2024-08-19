@@ -757,9 +757,24 @@ class Fusion(nn.Module):
         x_s = x_out + y_out
 
         return x_s
+from basicsr.archs.win_attn import WinAttn
+class TransformerBlock(nn.Module):
+    def __init__(self, dim, num_heads, win_size=8, ffn_expansion_factor=2.66, bias=False, LayerNorm_type='WithBias'):
+        super(TransformerBlock, self).__init__()
+
+        self.norm1 = LayerNorm(dim, LayerNorm_type)
+        self.attn = WinAttn(dim, win_size, num_heads, use_ca=True)
+        self.norm2 = LayerNorm(dim, LayerNorm_type)
+        self.ffn = FeedForward(dim, ffn_expansion_factor, bias)
+
+    def forward(self, x):
+        x = x + self.attn(self.norm1(x))
+        x = x + self.ffn(self.norm2(x))
+
+        return x
+
 if __name__ == '__main__':
-    model = FSBlock(64).cuda()
+    model = TransformerBlock(64, 4).cuda()
     x = torch.randn(1, 64, 256, 256).cuda()
-    z = torch.randn(1, 3, 256, 256).cuda()
     out = model(x)
     print(out.shape)
