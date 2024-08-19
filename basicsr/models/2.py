@@ -96,3 +96,29 @@
                 self.metric_results[metric] /= (idx + 1)
 
             self._log_validation_metric_values(current_iter, dataset_name, tb_logger)
+    def _log_validation_metric_values(self, current_iter, dataset_name, tb_logger):
+        log_str = f'Validation {dataset_name}\n'
+        for metric, value in self.metric_results.items():
+            log_str += f'\t # {metric}: {value:.4f}\n'
+        logger = get_root_logger()
+        logger.info(log_str)
+        if tb_logger:
+            for metric, value in self.metric_results.items():
+                tb_logger.add_scalar(f'metrics/{metric}', value, current_iter)
+
+    def get_current_visuals(self):
+        out_dict = OrderedDict()
+        out_dict['lq'] = self.lq.detach().cpu()
+        out_dict['result'] = self.output.detach().cpu()
+        if hasattr(self, 'gt'):
+            out_dict['gt'] = self.gt.detach().cpu()
+        if hasattr(self, 'outmask'):
+            out_dict['outmask'] = self.outmask.detach().cpu()
+        return out_dict
+
+    def save(self, epoch, current_iter):
+        if self.ema_decay > 0:
+            self.save_network([self.net_g, self.net_g_ema], 'net_g', current_iter, param_key=['params', 'params_ema'])
+        else:
+            self.save_network(self.net_g, 'net_g', current_iter)
+        self.save_training_state(epoch, current_iter)
