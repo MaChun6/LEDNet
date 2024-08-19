@@ -44,8 +44,18 @@ class PairedImageDataset(data.Dataset):
         self.use_rot = opt.get('use_rot', True)
         self.crop_size = opt.get('crop_size', 256)
         self.scale = opt.get('scale', 1)
+        self.multiple_width = opt.get('scale', 16)
 
-        self.gt_folder, self.lq_folder = opt['dataroot_gt'], opt['dataroot_lq']
+        if ',' in opt['dataroot_gt']:
+            gts = opt['dataroot_gt'].split(',')
+            self.gt_folder = gts[:1] * 5
+            self.gt_folder.extend(gts[1:])
+            lqs = opt['dataroot_lq'].split(',')
+            self.lq_folder = lqs[:1] * 5
+            self.lq_folder.extend(lqs[1:])
+        else:
+            self.gt_folder, self.lq_folder = opt['dataroot_gt'], opt['dataroot_lq']
+            
         if 'filename_tmpl' in opt:
             self.filename_tmpl = opt['filename_tmpl']
         else:
@@ -67,21 +77,55 @@ class PairedImageDataset(data.Dataset):
         lq_path = self.paths[index]['lq_path']
         img_bytes = self.file_client.get(lq_path, 'lq')
         img_lq = imfrombytes(img_bytes, float32=True)
+        if 'relo' in gt_path:
+            mask_path = gt_path.replace('image-test', 'mask').replace('/sharp', '').replace('_sharp', '')
+            img_mask = cv2.imread(mask_path, cv2.IMREAD_COLOR)/255.0
+            h, w = img_mask.shape[:2]
+            nw, nh = round(0.5 * w), round(0.5 * h)
+            img_mask = cv2.resize(img_mask, (nw, nh), interpolation=cv2.INTER_CUBIC)
+            img_mask[img_mask>=0.5] = 1
+            img_mask[img_mask<0.5] = 0
+
+        elif 'lolblur' in gt_path:
+            img_mask = np.ones(img_lq.shape, dtype=np.float32)
+
+        assert os.path.basename(gt_path.replace('sharp','')) == os.path.basename(lq_path.replace('blur','')), f'name error gt: {gt_path},  lq: {lq_path}'
+        assert (img_gt != img_lq).any(), f'gt and lq should not be the same, gt: {gt_path},  lq: {lq_path}'
 
         # augmentation for training
         if self.opt['phase'] == 'train':
             # random crop
-            img_gt, img_lq = paired_random_crop(img_gt, img_lq, self.crop_size, self.scale, gt_path)
+            img_gt, img_lq, img_mask = random_mask_crop(img_gt, img_lq, img_mask, self.crop_size)
             # flip, rotation
-            img_gt, img_lq = augment([img_gt, img_lq], self.use_flip, self.use_rot)
+            img_gt, img_lq, img_mask = augment([img_gt, img_lq, img_mask], self.use_flip, self.use_rot)
+        else:
+            if img_gt.shape[0] % self.multiple_width != 0:
+                l_pad = self.multiple_width - img_gt.shape[0] % self.multiple_width
+                img_lq = np.pad(img_lq, ((0, l_pad), (0, 0), (0, 0)), mode='reflect')
+                # img_mask = np.pad(img_mask, ((0, l_pad), (0, 0), (0, 0)), mode='constant', constant_values=0)
+            if img_gt.shape[1] % self.multiple_width != 0:
+                l_pad = self.multiple_width - img_gt.shape[1] % self.multiple_width
+                img_lq = np.pad(img_lq, ((0, 0), (0, l_pad), (0, 0)), mode='reflect')
+                # img_mask = np.pad(img_mask, ((0, 0), (0, l_pad), (0, 0)), mode='constant', constant_values=0)
 
         # BGR to RGB, HWC to CHW, numpy to tensor
-        img_gt, img_lq = img2tensor([img_gt, img_lq], bgr2rgb=True, float32=True)
+        img_gt, img_lq, img_mask = img2tensor([img_gt, img_lq, img_mask], bgr2rgb=True, float32=True)
         # normalize
         normalize(img_lq, self.mean, self.std, inplace=True)
         normalize(img_gt, self.mean, self.std, inplace=True)
 
-        return {'lq': img_lq, 'gt': img_gt, 'lq_path': lq_path, 'gt_path': gt_path}
+        return {'lq': img_lq, 'gt': img_gt, 'mask': img_mask[:1,:,:], 'lq_path': lq_path, 'gt_path': gt_path}
 
-    def __len__(self):
-        return len(self.paths)
+if __name__ == '__main__':
+    import cv2
+    import os
+    import numpy as np
+    opt_path = '/data/vjuicefs_ai_camera_llm/11165663/code/llblur/LEDNet-master/options/llbnetv72.yml'
+    with open(opt_path, mode='r') as f:
+        Loader, _ = ordered_yaml()
+        opt = yaml.load(f, Loader=Loader)
+    opt = opt['datasets']['train']
+    dataset = PairedImageDataset(opt)
+    print(len(dataset))
+    data = dataset[0]
+    print(data.keys())
