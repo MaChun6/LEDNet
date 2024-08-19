@@ -1,16 +1,16 @@
 # general settings
-name: LEDNet
-model_type: LEDNetModel
-num_gpu: 4
+name: llbnetv73_mask-0.1_stage2-decoder-fs_bfpu_depth4_last-mask_simo_v2
+model_type: Local2StageModel
+num_gpu: 2
 manual_seed: 10
 
 # dataset and data loader settings
 datasets:
   train:
     name: LOLBlurDataset_Train
-    type: PairedImageDataset
-    dataroot_gt: /mnt/lustre/sczhou/datasets/deblurring/LOLBlur/train/high_sharp_scaled
-    dataroot_lq: /mnt/lustre/sczhou/datasets/deblurring/LOLBlur/train/low_blur_noise
+    type: PairedLocalImageDataset
+    dataroot_gt: /data/vjuicefs_ai_camera_llm/11165663/datasets/relo/image/train/sharp,/data/vjuicefs_ai_camera_llm/11165663/datasets/lolblur/high_sharp_scaled
+    dataroot_lq: /data/vjuicefs_ai_camera_llm/11165663/datasets/relo/image/train/blur,/data/vjuicefs_ai_camera_llm/11165663/datasets/lolblur/low_blur_noise
     filename_tmpl: '{}'
     io_backend:
       type: disk
@@ -23,7 +23,7 @@ datasets:
 
     use_shuffle: true
     batch_size_per_gpu: &bsz 4
-    num_worker_per_gpu: 2
+    num_worker_per_gpu: 4
     dataset_enlarge_ratio: 100
     prefetch_mode: ~
 
@@ -32,9 +32,9 @@ datasets:
 
   val:
     name: LOLBlurDataset_Test
-    type: PairedImageDataset
-    dataroot_gt: /mnt/lustre/sczhou/datasets/deblurring/LOLBlur/test/high_sharp_scaled
-    dataroot_lq: /mnt/lustre/sczhou/datasets/deblurring/LOLBlur/test/low_blur_noise
+    type: PairedLocalImageDataset
+    dataroot_gt: /data/vjuicefs_ai_camera_llm/11165663/datasets/relo/image/test/sharp
+    dataroot_lq: /data/vjuicefs_ai_camera_llm/11165663/datasets/relo/image/test/blur
     io_backend:
       type: disk
 
@@ -43,9 +43,8 @@ datasets:
 
 # network structures
 network_g:
-  type: LEDNet
-  channels: [32, 64, 128, 128]
-  connection: false
+  type: LLBNetv74
+
 
 # path
 path:
@@ -56,55 +55,54 @@ path:
 # training settings
 train:
   optim_g:
-    type: Adam
-    lr: !!float 1e-4
-    weight_decay: 0
-    betas: [0.9, 0.99]
-
-  # scheduler:
-  #   type: MultiStepLR
-  #   milestones: [200000, 300000, 400000, 450000]
-  #   gamma: 0.5
+    type: AdamW
+    lr: !!float 1e-3
+    weight_decay: !!float 1e-3
+    betas: [0.9, 0.9]
 
   scheduler:
-    type: CosineAnnealingRestartLR
-    periods: [500000]
-    restart_weights: [1]
+    type: TrueCosineAnnealingLR
+    T_max: 500000
     eta_min: !!float 1e-7
+
+  # scheduler:
+  #   type: CosineAnnealingRestartLR
+  #   periods: [500000]
+  #   restart_weights: [1]
+  #   eta_min: !!float 1e-7
 
   total_iter: 500000
   warmup_iter: -1  # no warm up
+  stage1_weight: 0.2
+  stage2_weight: 0.8
 
   # losses
   pixel_opt:
-    type: L1Loss
+    type: PSNRLoss
     loss_weight: 1.0
     reduction: mean
 
+  mask_opt:
+    type: MSELoss
+    loss_weight: 0.1
+    reduction: mean
+
   perceptual_opt:
-    type: PerceptualLoss
-    layer_weights:
-      # before relu
-      'conv1_2': 1
-      'conv2_2': 1
-      'conv3_4': 1
-      'conv4_4': 1
-    vgg_type: vgg19
-    use_input_norm: true
-    perceptual_weight: 0.01
-    style_weight: 0
-    range_norm: true
-    criterion: l1
-  
-  use_side_loss: true
-  side_loss_weight: 0.8
-  init_weights: false
+    type: FFTWeightLoss
+    loss_weight: 0.1
+    reduction: mean
+
+  ssim_opt:
+    type: SSIMWeightLoss
+    loss_weight: 1
+    reduction: mean
 
 
 # validation settings
 val:
-  val_freq: !!float 2e4
-  save_img: false
+  val_freq: !!float 5e3
+  save_img: True
+  use_image: False
 
   metrics:
     psnr: # metric name, can be arbitrary
@@ -116,10 +114,19 @@ val:
       crop_border: 0
       test_y_channel: false
 
+    w_ssim:
+      type: calculate_weighted_ssim
+      crop_border: 0
+      test_y_channel: false
+
+    w_psnr:
+      type: calculate_weighted_psnr
+      crop_border: 0
+      test_y_channel: false
 # logging settings
 logger:
-  print_freq: 100
-  save_checkpoint_freq: !!float 2e4
+  print_freq: 200
+  save_checkpoint_freq: !!float 5e4
   use_tb_logger: true
   wandb:
     project: ~
