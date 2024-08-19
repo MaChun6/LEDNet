@@ -101,3 +101,58 @@ class Local2StageModel(BaseModel):
         # set up optimizers and schedulers
         self.setup_optimizers()
         self.setup_schedulers()
+
+    def setup_optimizers(self):
+        train_opt = self.opt['train']
+        optim_params = []
+        for k, v in self.net_g.named_parameters():
+            if v.requires_grad:
+                optim_params.append(v)
+            else:
+                logger = get_root_logger()
+                logger.warning(f'Params {k} will not be optimized.')
+
+        optim_type = train_opt['optim_g'].pop('type')
+        self.optimizer_g = self.get_optimizer(optim_type, optim_params, **train_opt['optim_g'])
+        self.optimizers.append(self.optimizer_g)
+
+    def feed_data(self, data):
+        self.lq = data['lq'].to(self.device) # low-blurred image
+        self.gt = data['gt'].to(self.device) # ground truth
+        self.mask = data['mask'].to(self.device) # ground truth
+        self.gt_path = data['gt_path']
+        self.lq_path = data['lq_path']
+
+    def optimize_parameters(self, current_iter):
+        self.optimizer_g.zero_grad()
+        alloutput = self.net_g(self.lq)
+        if 'stage1' in alloutput:
+            self.outputs_1 = alloutput['stage1']
+
+        if 'stage2' in alloutput:
+            self.outputs_2 = alloutput['stage2']
+
+        if 'masks' in alloutput:
+            self.masks = alloutput['masks']
+
+        self.output = self.outputs_2[-1]
+        l_total = 0
+        loss_dict = OrderedDict()
+        # pixel loss
+        gts = [self.gt,
+                torch.nn.functional.interpolate(self.gt, scale_factor=0.5, mode='bicubic', align_corners=False),
+                torch.nn.functional.interpolate(self.gt, scale_factor=0.25, mode='bicubic', align_corners=False)]
+        mask_gts = [self.mask,
+                torch.nn.functional.interpolate(self.mask, scale_factor=0.5, mode='bicubic', align_corners=False),
+                torch.nn.functional.interpolate(self.mask, scale_factor=0.25, mode='bicubic', align_corners=False)]
+        if self.cri_pix:
+            l_pix = 0
+            for i, output in enumerate(self.outputs_1):
+                l_pix += self.cri_pix(output, gts[i], mask_gts[i], self.opt['train']['stage1_weight'])
+
+            for i, output in enumerate(self.outputs_2):
+                l_pix += self.cri_pix(output, gts[i], mask_gts[i], self.opt['train']['stage2_weight'])
+
+            loss_dict['l_pix'] = l_pix
+            l_total += l_pix
+
