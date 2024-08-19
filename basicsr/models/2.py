@@ -67,3 +67,32 @@
                                                  f'{img_name}_{self.opt["name"]}_mask.png')
 
                 imwrite(tensor2img_fast(visuals['outmask']), save_img_path)
+
+            if with_metrics:
+                # calculate metrics
+                if self.opt['val']['use_image']:
+                    for name, opt_ in self.opt['val']['metrics'].items():
+                        metric_data = dict(img1=sr_img, img2=gt_img)
+                        self.metric_results[name] += calculate_metric(metric_data, opt_)
+                else:
+                    # img1= visuals['result']
+                    # img2= visuals['gt']
+                    # weight=self.mask
+                    # print(f'{img1.shape}, {img2.shape}, {weight.shape}, {img1.max()}, {img2.max()}, {weight.max()}')
+                    for name, opt_ in self.opt['val']['metrics'].items():
+                        metric_data = dict(img1=visuals['result'], img2= visuals['gt'], weight=self.mask)
+                        _metric = calculate_metric(metric_data, opt_)
+                        if _metric == float('inf'):
+                            print(f'Warning: {self.gt_path} and {self.lq_path} is inf or nan.')
+                        self.metric_results[name] += _metric
+            pbar.update(1)
+            pbar.set_description(f'Test {img_name}')
+            # if idx>10:
+            #     break
+        pbar.close()
+
+        if with_metrics:
+            for metric in self.metric_results.keys():
+                self.metric_results[metric] /= (idx + 1)
+
+            self._log_validation_metric_values(current_iter, dataset_name, tb_logger)
