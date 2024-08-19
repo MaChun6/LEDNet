@@ -45,3 +45,43 @@ def to_3d(x):
 
 def to_4d(x,h,w):
     return rearrange(x, 'b (h w) c -> b c h w',h=h,w=w)
+
+
+## Supervised Attention Module
+## https://github.com/swz30/MPRNet
+class SAM(nn.Module):
+    def __init__(self, n_feat, kernel_size=3, bias=True):
+        super(SAM, self).__init__()
+        self.conv1 = conv(n_feat, n_feat, kernel_size, bias=bias)
+        self.conv2 = conv(n_feat, 3, kernel_size, bias=bias)
+        self.conv3 = conv(3, n_feat, kernel_size, bias=bias)
+
+    def forward(self, x, x_img):
+        x1 = self.conv1(x)
+        img = self.conv2(x) + x_img
+        # img = self.conv2(x)
+        x2 = torch.sigmoid(self.conv3(img))
+        x1 = x1*x2
+        x1 = x1+x
+        return x1, img
+
+# from LEDNet
+class CurveCALayer(nn.Module):
+    def __init__(self, channel, n_curve):
+        super(CurveCALayer, self).__init__()
+        self.n_curve = n_curve
+        self.relu = nn.ReLU(inplace=False)
+        self.predict_a = nn.Sequential(
+            nn.Conv2d(channel, channel, 5, stride=1, padding=2),nn.ReLU(inplace=True),
+            nn.Conv2d(channel, channel, 3, stride=1, padding=1),nn.ReLU(inplace=True),
+            nn.Conv2d(channel, n_curve, 1, stride=1, padding=0),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        # clip the input features into range of [0,1]
+        a = self.predict_a(x)
+        x = self.relu(x) - self.relu(x-1)
+        for i in range(self.n_curve):
+            x = x + a[:,i:i+1]*x*(1-x)
+        return x
