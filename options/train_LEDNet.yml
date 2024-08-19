@@ -9,8 +9,8 @@ datasets:
   train:
     name: LOLBlurDataset_Train
     type: PairedLocalImageDataset
-    dataroot_gt: /data/vjuicefs_ai_camera_llm/11165663/datasets/relo/image/train/sharp,/data/vjuicefs_ai_camera_llm/11165663/datasets/lolblur/high_sharp_scaled
-    dataroot_lq: /data/vjuicefs_ai_camera_llm/11165663/datasets/relo/image/train/blur,/data/vjuicefs_ai_camera_llm/11165663/datasets/lolblur/low_blur_noise
+    dataroot_gt: /data///datasets/relo/image/train/sharp,/data///datasets/lolblur/high_sharp_scaled
+    dataroot_lq: /data///datasets/relo/image/train/blur,/data///datasets/lolblur/low_blur_noise
     filename_tmpl: '{}'
     io_backend:
       type: disk
@@ -33,8 +33,8 @@ datasets:
   val:
     name: LOLBlurDataset_Test
     type: PairedLocalImageDataset
-    dataroot_gt: /data/vjuicefs_ai_camera_llm/11165663/datasets/relo/image/test/sharp
-    dataroot_lq: /data/vjuicefs_ai_camera_llm/11165663/datasets/relo/image/test/blur
+    dataroot_gt: /data///datasets/relo/image/test/sharp
+    dataroot_lq: /data///datasets/relo/image/test/blur
     io_backend:
       type: disk
 
