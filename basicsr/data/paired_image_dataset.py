@@ -120,7 +120,7 @@ if __name__ == '__main__':
     import cv2
     import os
     import numpy as np
-    opt_path = '/data/vjuicefs_ai_camera_llm/11165663/code/llblur/LEDNet-master/options/llbnetv72.yml'
+    opt_path = '/data///code/llblur/LEDNet-master/options/llbnetv72.yml'
     with open(opt_path, mode='r') as f:
         Loader, _ = ordered_yaml()
         opt = yaml.load(f, Loader=Loader)
