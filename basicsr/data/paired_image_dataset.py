@@ -7,6 +7,25 @@ from basicsr.data.transforms import augment, paired_random_crop
 from basicsr.utils import FileClient, imfrombytes, img2tensor
 from basicsr.utils.registry import DATASET_REGISTRY
 
+def random_mask_crop(img_gt, img_blur, blur_mask, crop_size):
+
+    force_blur_region = random.random() < 0.5
+    ps = crop_size
+    if ps > 0:
+        H, W, _ = img_gt.shape
+        y_s, x_s = random.randint(
+            0, H - 1 - ps), random.randint(0, W - 1 - ps)
+        R_blur = blur_mask.sum() / np.prod(blur_mask.shape)
+        if force_blur_region and R_blur > 0.05:
+            blur_pixs = np.stack(
+                np.where(blur_mask[ps // 2:-ps // 2, ps // 2:-ps // 2, 0]), 1)
+            if len(blur_pixs) > 0:
+                y_s, x_s = random.choice(blur_pixs)
+
+        img_gt = img_gt[y_s:y_s + ps, x_s:x_s + ps]
+        img_blur = img_blur[y_s:y_s + ps, x_s:x_s + ps]
+        blur_mask = blur_mask[y_s:y_s + ps, x_s:x_s + ps]
+    return img_gt, img_blur, blur_mask
 
 @DATASET_REGISTRY.register()
 class PairedImageDataset(data.Dataset):
