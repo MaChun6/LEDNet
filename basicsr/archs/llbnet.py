@@ -24,8 +24,9 @@ import math
 from torch.nn import functional as F
 from basicsr.utils.registry import ARCH_REGISTRY
 from einops import rearrange
-from basicsr.archs.arch_util import LayerNorm2d
-from basicsr.archs.module import WaveletBlock, NAFBlock, FlowBlock, FSBlock, Fusion
+# from basicsr.archs.arch_util import LayerNorm2d
+from basicsr.archs.module import WaveletBlock, NAFBlock, FlowBlock, FSBlock, Fusion, LayerNorm
+from basicsr.archs.transformer_block import CTransformerBlock, FLowTransformerBlock
 # MaskDeformResBlock,
 def conv3x3(in_chn, out_chn, bias=True):
     layer = nn.Conv2d(in_chn, out_chn, kernel_size=3, stride=1, padding=1, bias=bias)
@@ -93,7 +94,7 @@ class FreMaskBlock(nn.Module):
         super(FreMaskBlock, self).__init__()
         self.nc = nc
         self.in_conv = nn.Sequential(
-            LayerNorm2d(nc),
+            LayerNorm(nc, 'WithBias'),
             nn.Conv2d(nc,nc,1,1,0),
             nn.GELU()
         )
@@ -127,7 +128,10 @@ class FreMaskBlock(nn.Module):
 
 # @ARCH_REGISTRY.register()
 class LLBNetv74(nn.Module):
-    def __init__(self, in_chn=3, wf=48, depth=4, fuse_before_downsample=True, relu_slope=0.2, num_heads=[4,8,0], layers=[1,1,1,1]):
+    def __init__(self, in_chn=3, wf=32, 
+                 depth=4, fuse_before_downsample=True, 
+                 relu_slope=0.2, num_heads=[1,2,4,8], 
+                 layers=[1,2,2,4]):
         super(LLBNetv74, self).__init__()
         self.depth = depth
         self.fuse_before_downsample = fuse_before_downsample
@@ -141,8 +145,8 @@ class LLBNetv74(nn.Module):
         prev_channels = self.get_input_chn(wf)
         for i in range(depth):
             downsample = True if (i+1) < depth else False
-            self.down_path_1.append(UNetConvBlock(prev_channels, (2**i) * wf, downsample, relu_slope, block_type='res'))
-            self.down_path_2.append(UNetConvBlock(prev_channels, (2**i) * wf, downsample, relu_slope, block_type='res', layers=self.layers[i], use_csff=True))
+            self.down_path_1.append(UNetConvBlock(prev_channels, (2**i) * wf, downsample, relu_slope, block_type='cattn', num_heads=num_heads[i], layers=self.layers[i]))
+            self.down_path_2.append(UNetConvBlock(prev_channels, (2**i) * wf, downsample, relu_slope, block_type='fattn', layers=self.layers[i], use_csff=True, num_heads=num_heads[i]))
             prev_channels = (2**i) * wf
 
         self.up_path_1 = nn.ModuleList()
@@ -151,8 +155,8 @@ class LLBNetv74(nn.Module):
         self.skip_conv_2 = nn.ModuleList()
         self.mask_pred = nn.ModuleList()
         for i in reversed(range(depth - 1)):
-            self.up_path_1.append(UNetUpBlock(prev_channels, (2**i)*wf, relu_slope, use_curve=True, block_type='res'))
-            self.up_path_2.append(UNetUpBlock(prev_channels, (2**i)*wf, relu_slope, block_type='fs', layers=self.layers[i]))
+            self.up_path_1.append(UNetUpBlock(prev_channels, (2**i)*wf, relu_slope,  block_type='cattn', num_heads=num_heads[i], layers=self.layers[i]))
+            self.up_path_2.append(UNetUpBlock(prev_channels, (2**i)*wf, relu_slope, block_type='fattn', layers=self.layers[i], num_heads=num_heads[i], use_flow=True))
             self.skip_conv_1.append(nn.Conv2d((2**i)*wf, (2**i)*wf, 3, 1, 1))
             self.skip_conv_2.append(nn.Conv2d((2**i)*wf, (2**i)*wf, 3, 1, 1))
             self.mask_pred.append(FreMaskBlock((2**(i))*wf))
@@ -236,7 +240,12 @@ class LLBNetv74(nn.Module):
 
 
 class UNetConvBlock(nn.Module):
-    def __init__(self, in_size, out_size, downsample, relu_slope, use_emgc=False, num_heads=None, use_curve=False, block_type='res', layers=1, use_csff=False): # cat
+    def __init__(self, in_size, out_size, 
+                 downsample, relu_slope, 
+                 use_emgc=False, num_heads=None, 
+                 use_curve=False, block_type='res', 
+                 layers=1, use_csff=False,
+                 use_flow=False): # cat
         super(UNetConvBlock, self).__init__()
         self.downsample = downsample
         self.use_emgc = use_emgc
@@ -247,7 +256,7 @@ class UNetConvBlock(nn.Module):
         # Res 和 Dres 缺少那种膨胀操作，类似于FFN里面那种C->2C->C的操作
         if self.block_type=='res':
             self.upchannel = nn.Conv2d(in_size, out_size, kernel_size=3, padding=1, bias=True)
-            self.res = nn.ModuleList([nn.Sequential(LayerNorm2d(out_size),
+            self.res = nn.ModuleList([nn.Sequential(LayerNorm(out_size, 'WithBias'),
                                     nn.Conv2d(out_size, out_size, kernel_size=3, padding=1, bias=True),
                                     nn.LeakyReLU(relu_slope, inplace=False),
                                     nn.Conv2d(out_size, out_size, kernel_size=3, padding=1, bias=True)
@@ -260,12 +269,12 @@ class UNetConvBlock(nn.Module):
 
         elif block_type=='dres':
             self.upchannel = nn.Conv2d(in_size, out_size, kernel_size=3, padding=1, bias=True)
-            self.res = nn.ModuleList([nn.Sequential(LayerNorm2d(out_size),
+            self.res = nn.ModuleList([nn.Sequential(LayerNorm(out_size, 'WithBias'),
                                     nn.Conv2d(out_size, out_size, kernel_size=3, padding=1, bias=True),
                                     nn.LeakyReLU(relu_slope, inplace=False),
                                     nn.Conv2d(out_size, out_size, kernel_size=3, padding=1, bias=True)
                                    ),
-                                   nn.Sequential(LayerNorm2d(out_size),
+                                   nn.Sequential(LayerNorm(out_size, 'WithBias'),
                                     nn.Conv2d(out_size, out_size, kernel_size=3, padding=1, bias=True),
                                     nn.LeakyReLU(relu_slope, inplace=False),
                                     nn.Conv2d(out_size, out_size, kernel_size=3, padding=1, bias=True)
@@ -281,23 +290,24 @@ class UNetConvBlock(nn.Module):
         elif block_type=='fs':
             self.upchannel = nn.Conv2d(in_size, out_size, kernel_size=3, padding=1, bias=True)
             self.res = nn.ModuleList([FSBlock(in_size) for _ in range(layers)])
+               
+        elif block_type=='cattn':
+            self.upchannel = nn.Conv2d(in_size, out_size, kernel_size=3, padding=1, bias=True)
+            self.res = nn.ModuleList([CTransformerBlock(in_size, num_heads=num_heads) for _ in range(layers)])
+        
+        elif block_type=='fattn':
+            self.upchannel = nn.Conv2d(in_size, out_size, kernel_size=3, padding=1, bias=True)
+            self.res = nn.ModuleList([FLowTransformerBlock(in_size, num_heads=num_heads, use_flow=True if i==0 and use_flow else False
+                                                           ) for i in range(layers)])
 
         if self.use_curve:
             self.curve = CurveCALayer(out_size, 3)
 
         if downsample and use_csff:
-            # print('use_csff')
-            # self.csff_enc = nn.Conv2d(out_size, out_size, 3, 1, 1)
-            # self.csff_dec = nn.Conv2d(out_size, out_size, 3, 1, 1)
             self.csff = Fusion(in_dim = out_size)
 
         if downsample:
             self.downsample = conv_down(out_size, out_size, bias=False)
-
-        # if self.num_heads is not None and self.num_heads!=0:
-        #     self.mask_crossattn_enc = MaskCrossAttn(out_size, num_heads=self.num_heads, ffn_expansion_factor=2, bias=False)
-        #     self.mask_crossattn_dec = MaskCrossAttn(out_size, num_heads=self.num_heads, ffn_expansion_factor=2, bias=False)
-
 
     def forward(self, x, enc=None, dec=None, mask=None, merge_before_downsample=True, xs=None):
         if 'res' in self.block_type:
@@ -307,6 +317,10 @@ class UNetConvBlock(nn.Module):
         elif 'flow' in self.block_type:
             for i, blk in enumerate(self.res):
                 x = blk(x, xs, return_mask=True)
+            x= self.upchannel(x)
+        elif xs is not None and self.block_type == 'fattn':
+            for i, blk in enumerate(self.res):
+                x = blk(x, xs)
             x= self.upchannel(x)
         else:
             for i, blk in enumerate(self.res):
@@ -319,15 +333,9 @@ class UNetConvBlock(nn.Module):
             out = self.curve(out)
 
         if enc is not None and dec is not None:
-            # assert self.use_csff
-            # out = out + self.csff_enc(enc) + self.csff_dec(dec)
             assert self.use_csff
             out = out + self.csff(enc, dec)
 
-        if self.num_heads is not None and self.num_heads!=0:
-            # out_enc = self.mask_crossattn_enc(out, mask)
-            # out_dec = self.mask_crossattn_dec(dec, 1-mask)
-            out = out * mask + dec * (1-mask)
 
         if self.downsample:
             out_down = self.downsample(out)
@@ -339,21 +347,18 @@ class UNetConvBlock(nn.Module):
 
 class UNetUpBlock(nn.Module):
 
-    def __init__(self, in_size, out_size, relu_slope, use_curve=False, block_type=False, num_heads=None, layers=1):
+    def __init__(self, in_size, out_size,
+                  relu_slope, use_curve=False, 
+                  block_type=False, num_heads=None, 
+                  layers=1, use_flow=False):
         super(UNetUpBlock, self).__init__()
         self.num_heads = num_heads
         self.up = nn.ConvTranspose2d(in_size, out_size, kernel_size=2, stride=2, bias=True)
-        self.conv_block = UNetConvBlock(in_size, out_size, False, relu_slope, use_curve=use_curve, block_type=block_type, num_heads=num_heads, layers=layers)
-        # if self.num_heads is not None and self.num_heads!=0:
-        #     self.mask_crossattn_enc = MaskCrossAttn(out_size, num_heads=self.num_heads, ffn_expansion_factor=2, bias=False)
-        #     self.mask_crossattn_dec = MaskCrossAttn(out_size, num_heads=self.num_heads, ffn_expansion_factor=2, bias=False)
+        self.conv_block = UNetConvBlock(in_size, out_size, False, relu_slope, use_curve=use_curve, block_type=block_type, num_heads=num_heads, layers=layers, use_flow=use_flow)
 
     def forward(self, x, bridge, dec=None, mask=None, mask_fn=None, xs=None):
         up = self.up(x)
-        # if dec is not None and mask is not None:
-        #     up = self.mask_crossattn_enc(up, mask)
-        #     dec = self.mask_crossattn_dec(dec, 1-mask)
-        #     up = up + dec
+
         if mask is not None:
             out = torch.cat([up, bridge], 1)
         else:
@@ -386,10 +391,10 @@ if __name__ == "__main__":
         out, mask = model(x)
         print('Output shape:', mask.shape)
 
-    print('# model_restoration parameters: %.2f M' % (sum(param.numel()
-          for param in model.parameters()) / 1e6))
-    for i, name in enumerate(model.state_dict()):
-        print(f'[{i}] {name}')
+    # print('# model_restoration parameters: %.2f M' % (sum(param.numel()
+    #       for param in model.parameters()) / 1e6))
+    # for i, name in enumerate(model.state_dict()):
+    #     print(f'[{i}] {name}')
 
     # i = 0
     # for k, v in model.state_dict().items():
