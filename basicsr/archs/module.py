@@ -772,7 +772,81 @@ class TransformerBlock(nn.Module):
         x = x + self.ffn(self.norm2(x))
 
         return x
+class FSCA(nn.Module):
+    def __init__(self, in_nc, kernel_size=3, stride=1, padding=1, bias=True):
+        super(FSCA, self).__init__()
+        self.naf_fre = NAFBlock(in_nc)
+        self.naf_pix = NAFBlock(in_nc)
+        self.attn_fre = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(in_channels=in_nc, out_channels=in_nc, kernel_size=1, stride=1, padding=0),
+            nn.Sigmoid()
+        )
+        self.attn_pix = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(in_channels=in_nc, out_channels=in_nc, kernel_size=1, stride=1, padding=0),
+            nn.Sigmoid()
+        )
+        self.fusion = nn.Conv2d(in_channels=in_nc * 2, out_channels=in_nc, kernel_size=3, stride=1, padding=1)
 
+    def forward(self, x):
+        imp = x
+        x_freq = self.naf_fre(x)
+        x_freq = torch.fft.rfft2(x_freq, norm='backward')
+        x_freq_amp = torch.abs(x_freq)
+        x_freq_pha = torch.angle(x_freq)
+
+        x_pix = self.naf_pix(x)
+
+        x_pix = self.attn_fre(x_freq_amp) * x_pix
+        x_freq_amp = self.attn_pix(x_pix) * x_freq_pha
+        real = x_freq_amp * torch.cos(x_freq_pha)
+        imag = x_freq_amp * torch.sin(x_freq_pha)
+        x_freq = torch.complex(real, imag)
+        x_freq = torch.fft.irfft2(x_freq)
+        x = self.fusion(torch.cat((x_pix, x_freq), dim=1))
+        return x
+from mmcv.ops import ModulatedDeformConv2d, DeformConv2d
+class DDDBlock(nn.Module):
+    def __init__(self, in_channels, kernel_size=3, dilations=(0, 1, 2, 4), bias=True, stride=1, use_mask=False, padding=1):
+        super(DDDBlock, self).__init__()
+        self.dilations = dilations
+        self.use_mask = use_mask
+        self.offset_convs = nn.ModuleList([nn.Conv2d(in_channels, 2 * kernel_size * kernel_size, kernel_size=3, 
+                                                     stride=stride, dilation=dilation, padding=dilation, bias=bias) for dilation in self.dilations if dilation != 0]) 
+        
+        for module in self.offset_convs:
+            module.weight.data.zero_()
+            if bias:
+                module.bias.data.zero_()
+        if use_mask:
+            self.mask_convs = nn.ModuleList([nn.Conv2d(in_channels, kernel_size * kernel_size, kernel_size=3, 
+                                                     stride=stride, dilation=dilation,padding=dilation, bias=bias) for dilation in self.dilations if dilation != 0]) 
+            for module in self.mask_convs:
+                module.weight.data.zero_()
+                if bias:
+                    module.bias.data.zero_()
+        
+        self.def_convs = nn.ModuleList([ModulatedDeformConv2d(in_channels, in_channels, kernel_size, padding=padding)])
+        self.fusion_conv = nn.Conv2d(in_channels, in_channels, 3, 1, 1)
+    def forward(self, x, pre_mask=None):
+        offsets = []
+        xs = []
+        for i, offset_conv in enumerate(self.offset_convs):
+            offset = offset_conv(x)
+            offsets.append(offset)
+        if self.use_mask:
+            masks = []
+            for i, mask_conv in enumerate(self.mask_convs):
+                mask = torch.sigmoid(mask_conv(x))
+                masks.append(mask)
+        for i, def_conv in enumerate(self.def_convs):
+            x_def = def_conv(x, offsets[i], pre_mask if not self.use_mask else masks[i])
+            xs.append(x_def)
+        xs = torch.stack(xs)
+        xs = torch.sum(xs, dim=0)
+        x = self.fusion_conv(xs)*pre_mask + x * (1-pre_mask)
+        return x
 if __name__ == '__main__':
     model = TransformerBlock(64, 4).cuda()
     x = torch.randn(1, 64, 256, 256).cuda()
