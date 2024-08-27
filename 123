@@ -81,7 +81,7 @@ def img2tensor(imgs, bgr2rgb=True, float32=True):
         return _totensor(imgs, bgr2rgb, float32)
 
 if __name__ == '__main__':
-    model_dir = '/data/vjuicefs_ai_camera_llm/11165663/code/llblur/LLBlur_test/results'
+    model_dir = '/data///code/llblur/LLBlur_test/results'
     # models = os.listdir(model_dir)
     # models = sorted([model.split('/')[-1] for model in models if 'local' not in model])
     models = ['llbnetv73_local']
@@ -90,8 +90,8 @@ if __name__ == '__main__':
 
         parser = argparse.ArgumentParser(
             description='Image motion deblurring evaluation on GoPro/HIDE')
-        parser.add_argument('--test_path', type=str, default='/data/vjuicefs_ai_camera_llm/11165663/datasets/relo/image/test/sharp')
-        parser.add_argument('--result_path', type=str, default='/data/vjuicefs_ai_camera_llm/11165663/code/llblur/LLBlur_test/results')
+        parser.add_argument('--test_path', type=str, default='/data///datasets/relo/image/test/sharp')
+        parser.add_argument('--result_path', type=str, default='/data///code/llblur/LLBlur_test/results')
         parser.add_argument('--model', type=str, default=model,help='options: lednet, lednet_retrain, lednetgan')
         parser.add_argument('--dataset', type=str, default='lol-relo', help='dataset name')
         parser.add_argument('--save_path', default='./metrics.csv',
@@ -99,9 +99,9 @@ if __name__ == '__main__':
         args = parser.parse_args()
 
         args.result_path = args.result_path + '/' + f'{args.model}'
-        # args.result_path = '/data/vjuicefs_ai_camera_llm/11165663/datasets/relo/test'
+        # args.result_path = '/data///datasets/relo/test'
         # args.model = 'blur'
-        # /data/vjuicefs_ai_camera_llm/11165663/datasets/relo/image/test/blur
+        # /data///datasets/relo/image/test/blur
         print('args.result_path:', args.result_path)
         # continue
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
