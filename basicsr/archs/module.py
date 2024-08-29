@@ -808,10 +808,11 @@ class FSCA(nn.Module):
         return x
 from mmcv.ops import ModulatedDeformConv2d, DeformConv2d
 class DDDBlock(nn.Module):
-    def __init__(self, in_channels, kernel_size=3, dilations=(0, 1, 2, 4), bias=True, stride=1, use_mask=False, padding=1):
+    def __init__(self, in_channels, kernel_size=3, dilations=(0, 1, 2, 4), bias=True, stride=1, use_mask=False, padding=1, use_pre_offest=False):
         super(DDDBlock, self).__init__()
         self.dilations = dilations
         self.use_mask = use_mask
+        self.use_pre_offest = use_pre_offest
         self.offset_convs = nn.ModuleList([nn.Conv2d(in_channels, 2 * kernel_size * kernel_size, kernel_size=3, 
                                                      stride=stride, dilation=dilation, padding=dilation, bias=bias) for dilation in self.dilations if dilation != 0]) 
         
@@ -829,7 +830,9 @@ class DDDBlock(nn.Module):
         
         self.def_convs = nn.ModuleList([ModulatedDeformConv2d(in_channels, in_channels, kernel_size, padding=padding)])
         self.fusion_conv = nn.Conv2d(in_channels, in_channels, 3, 1, 1)
-    def forward(self, x, pre_mask=None):
+        if self.use_pre_offest:
+            self.offset_fusions = nn.ModuleList([nn.Conv2d(2 * kernel_size * kernel_size*2, 2 * kernel_size * kernel_size, 3, 1, 1) for _ in range(len(self.dilations))])
+    def forward(self, x, pre_mask=None, pre_offsets=None):
         offsets = []
         xs = []
         for i, offset_conv in enumerate(self.offset_convs):
@@ -841,7 +844,8 @@ class DDDBlock(nn.Module):
                 mask = torch.sigmoid(mask_conv(x))
                 masks.append(mask)
         for i, def_conv in enumerate(self.def_convs):
-            x_def = def_conv(x, offsets[i], pre_mask if not self.use_mask else masks[i])
+            x_def = def_conv(x, offsets[i] if not self.use_pre_offest else self.offset_fusions[i](torch.cat([offsets[i], F.interpolate(pre_offsets[i], scale_factor=2)], dim=1)),
+                              pre_mask if not self.use_mask else masks[i])
             xs.append(x_def)
         xs = torch.stack(xs)
         xs = torch.sum(xs, dim=0)
