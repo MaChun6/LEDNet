@@ -815,6 +815,7 @@ class DDDBlock(nn.Module):
         self.use_pre_offest = use_pre_offest
         self.offset_convs = nn.ModuleList([nn.Conv2d(in_channels, 2 * kernel_size * kernel_size, kernel_size=3, 
                                                      stride=stride, dilation=dilation, padding=dilation, bias=bias) for dilation in self.dilations if dilation != 0]) 
+        self.norm = LayerNorm(in_channels, 'WithBias')
         
         for module in self.offset_convs:
             module.weight.data.zero_()
@@ -835,6 +836,8 @@ class DDDBlock(nn.Module):
     def forward(self, x, pre_mask=None, pre_offsets=None):
         offsets = []
         xs = []
+        inp = x
+        x = self.norm(x)
         for i, offset_conv in enumerate(self.offset_convs):
             offset = offset_conv(x)
             offsets.append(offset)
@@ -849,7 +852,7 @@ class DDDBlock(nn.Module):
             xs.append(x_def)
         xs = torch.stack(xs)
         xs = torch.sum(xs, dim=0)
-        x = self.fusion_conv(xs)*pre_mask + x * (1-pre_mask)
+        x = self.fusion_conv(xs)*pre_mask + inp * (1-pre_mask)
         return x
 if __name__ == '__main__':
     model = TransformerBlock(64, 4).cuda()
